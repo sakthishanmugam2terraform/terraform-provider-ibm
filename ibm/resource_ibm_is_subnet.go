@@ -5,6 +5,8 @@ import (
 	"log"
 	"time"
 
+	corev3 "github.com/IBM/go-sdk-core/v3/core"
+
 	"github.com/hashicorp/terraform-plugin-sdk/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
 	"github.ibm.com/ibmcloud/vpc-go-sdk/vpcclassicv1"
@@ -29,6 +31,8 @@ const (
 	isSubnetProvisioningDone = "done"
 	isSubnetDeleting         = "deleting"
 	isSubnetDeleted          = "done"
+
+	isSubnetRoutingTableID = "routing_table_id"
 )
 
 func resourceIBMISSubnet() *schema.Resource {
@@ -131,6 +135,13 @@ func resourceIBMISSubnet() *schema.Resource {
 				Computed: true,
 			},
 
+			isSubnetRoutingTableID: {
+				Type:        schema.TypeString,
+				Optional:    true,
+				ForceNew:    false,
+				Description: "routing table id that is associated with the subnet",
+			},
+
 			ResourceControllerURL: {
 				Type:        schema.TypeString,
 				Computed:    true,
@@ -204,13 +215,19 @@ func resourceIBMISSubnetCreate(d *schema.ResourceData, meta interface{}) error {
 		gw = pgw.(string)
 	}
 
+	// route table association related
+	rtID := ""
+	if rt, ok := d.GetOk(isSubnetRoutingTableID); ok {
+		rtID = rt.(string)
+	}
+
 	if userDetails.generation == 1 {
 		err := classicSubnetCreate(d, meta, name, vpc, zone, ipv4cidr, acl, gw, ipv4addrcount64)
 		if err != nil {
 			return err
 		}
 	} else {
-		err := subnetCreate(d, meta, name, vpc, zone, ipv4cidr, acl, gw, ipv4addrcount64)
+		err := subnetCreate(d, meta, name, vpc, zone, ipv4cidr, acl, gw, rtID, ipv4addrcount64)
 		if err != nil {
 			return err
 		}
@@ -268,7 +285,7 @@ func classicSubnetCreate(d *schema.ResourceData, meta interface{}, name, vpc, zo
 	return nil
 }
 
-func subnetCreate(d *schema.ResourceData, meta interface{}, name, vpc, zone, ipv4cidr, acl, gw string, ipv4addrcount64 int64) error {
+func subnetCreate(d *schema.ResourceData, meta interface{}, name, vpc, zone, ipv4cidr, acl, gw, rtID string, ipv4addrcount64 int64) error {
 	sess, err := vpcClient(meta)
 	if err != nil {
 		return err
@@ -299,6 +316,13 @@ func subnetCreate(d *schema.ResourceData, meta interface{}, name, vpc, zone, ipv
 			ID: &acl,
 		}
 	}
+
+	if rtID != "" {
+		subnetTemplate.RoutingTable = &vpcv1.RoutingTableIdentity{
+			ID: &rtID,
+		}
+	}
+
 	rg := ""
 	if grp, ok := d.GetOk(isSubnetResourceGroup); ok {
 		rg = grp.(string)
@@ -306,6 +330,7 @@ func subnetCreate(d *schema.ResourceData, meta interface{}, name, vpc, zone, ipv
 			ID: &rg,
 		}
 	}
+
 	//create a subnet
 	createSubnetOptions := &vpcv1.CreateSubnetOptions{
 		SubnetPrototype: subnetTemplate,
@@ -486,6 +511,13 @@ func subnetGet(d *schema.ResourceData, meta interface{}, id string) error {
 	} else {
 		d.Set(isSubnetPublicGateway, nil)
 	}
+
+	if subnet.RoutingTable != nil {
+		d.Set(isSubnetRoutingTableID, *subnet.RoutingTable.ID)
+	} else {
+		d.Set(isSubnetRoutingTableID, nil)
+	}
+
 	d.Set(isSubnetStatus, *subnet.Status)
 	d.Set(isSubnetZone, *subnet.Zone.Name)
 	d.Set(isSubnetVPC, *subnet.Vpc.ID)
@@ -619,6 +651,22 @@ func subnetUpdate(d *schema.ResourceData, meta interface{}, id string) error {
 			hasChanged = true
 		}
 	}
+
+	if d.HasChange(isSubnetRoutingTableID) {
+		rtID := d.Get(isSubnetRoutingTableID).(string)
+		rt := &vpcv1.RoutingTableIdentity{
+			ID: corev3.StringPtr(rtID),
+		}
+		setSubnetRoutingTableBindingOptions := sess.NewSetSubnetRoutingTableBindingOptions(id, rt)
+		setSubnetRoutingTableBindingOptions.SetRoutingTableIdentity(rt)
+		setSubnetRoutingTableBindingOptions.SetID(id)
+		_, _, err = sess.SetSubnetRoutingTableBinding(setSubnetRoutingTableBindingOptions)
+		if err != nil {
+			log.Printf("SetSubnetRoutingTableBinding eroor: %s", err)
+			return err
+		}
+	}
+
 	if hasChanged {
 		updateSubnetOptions.ID = &id
 		_, response, err := sess.UpdateSubnet(updateSubnetOptions)

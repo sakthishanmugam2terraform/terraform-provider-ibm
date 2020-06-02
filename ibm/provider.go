@@ -380,6 +380,10 @@ func Provider() terraform.ResourceProvider {
 			"ibm_dns_zone":              resourceIBMPrivateDNSZone(),
 			"ibm_dns_permitted_network": resourceIBMPrivateDNSPermittedNetwork(),
 			"ibm_dns_resource_record":   resourceIBMPrivateDNSResourceRecord(),
+
+			//Custom Route related resources
+			"ibm_is_vpc_routing_tables":      resourceIBMISVPCRoutingTables(),
+			"ibm_is_vpc_routing_table_route": resourceIBMISVPCRoutingTableRoute(),
 		},
 
 		ConfigureFunc: providerConfigure,
